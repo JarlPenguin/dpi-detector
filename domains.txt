@@ -35,7 +35,6 @@ gelbooru.com/script/application.grid.js
 www.browserleaks.com
 www.cdn77.com
 shikimori.one
-jut.su
 mos-gorsud.co
 kinopub.online
 kino.pub
