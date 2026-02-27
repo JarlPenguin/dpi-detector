@@ -149,7 +149,10 @@ async def _run_phase_with_progress(tasks: list, description: str) -> None:
 
 async def run_domains_test(semaphore: asyncio.Semaphore, stub_ips: set, domains: list) -> dict:
     """Тест 2: TLS1.3 IPv4 → TLS1.3 IPv6 → TLS1.2 → HTTP injection."""
-    console.print("\n[bold]Проверка доменов (TLS + HTTP injection)[/bold]\n")
+    console.print(
+        f"\n[bold]Проверка доступности доменов[/bold]  "
+        f"[dim]Целей: {len(domains)} | timeout: {config.TIMEOUT}s[/dim]\n"
+    )
 
     table = Table(show_header=True, header_style="bold magenta", border_style="dim")
     table.add_column("Домен",      style="cyan", no_wrap=True, width=18)
@@ -238,7 +241,10 @@ async def run_domains_test(semaphore: asyncio.Semaphore, stub_ips: set, domains:
 
 async def run_tcp_test(semaphore: asyncio.Semaphore, tcp_items: list) -> dict:
     """Тест 3: FAT-header TCP блокировка."""
-    console.print("\n[bold]Проверка TCP 16-20KB блока[/bold]")
+    console.print(
+        f"\n[bold]Проверка TCP 16-20KB блока[/bold]  "
+        f"[dim]Целей: {len(tcp_items)} | timeout: {config.FAT_CONNECT_TIMEOUT}s[/dim]"
+    )
     console.print(
         "[dim]SHORT (HEAD) → проверяем живость. FAT (GET + 64KB заголовок) → смотрим на блокировку.[/dim]\n"
     )
