@@ -1,3 +1,4 @@
+from typing import Optional, List, Dict
 import asyncio
 import os
 import sys
@@ -29,7 +30,7 @@ DOMAINS         = load_domains()
 TCP_16_20_ITEMS = load_tcp_targets()
 
 
-async def _fetch_latest_version() -> str | None:
+async def _fetch_latest_version() -> Optional[str]:
     """Запрашивает последний тег с GitHub API. Возвращает строку версии или None."""
     url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
     try:
@@ -76,8 +77,8 @@ def _flush_stdin() -> None:
 
 def _format_summary(
     run_dns: bool, run_domains: bool, run_tcp: bool,
-    dns_intercept: int, domain_stats: dict | None, tcp_stats: dict | None,
-) -> list[str]:
+    dns_intercept: int, domain_stats: Optional[Dict], tcp_stats: Optional[Dict]
+) -> List[str]:
     lines = []
 
     if run_dns:
@@ -86,12 +87,12 @@ def _format_summary(
         if dns_intercept == 0:
             lines.append(
                 f"[bold]DNS[/bold]          "
-                f"[green]√ {ok_dns}/{total_dns}  не подменяется[/green]"
+                f"[green]√ {ok_dns}/{total_dns} не подменяется[/green]"
             )
         elif dns_intercept == total_dns:
             lines.append(
                 f"[bold]DNS[/bold]          "
-                f"[red]× {dns_intercept}/{total_dns}  подменяется провайдером[/red]"
+                f"[red]× {dns_intercept}/{total_dns} подменяется провайдером[/red]"
             )
         else:
             lines.append(
@@ -116,7 +117,7 @@ def _format_summary(
         t = tcp_stats
         pct = int(t["ok"] / t["total"] * 100) if t["total"] else 0
         line = (
-            f"[bold]TCP 16-20KB[/bold]   "
+            f"[bold]TCP 16-20KB[/bold]  "
             f"[green]√ {t['ok']}/{t['total']} OK[/green]"
             + (f"  [red]× {t['blocked']} блок.[/red]" if t['blocked'] else "")
             + (f"  [yellow]≈ {t['mixed']} смеш.[/yellow]" if t['mixed'] else "")

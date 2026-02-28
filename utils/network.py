@@ -1,8 +1,9 @@
 import asyncio
 import socket
 
+from typing import Optional
 
-async def get_resolved_ip(domain: str, family: int = socket.AF_INET) -> str | None:
+async def get_resolved_ip(domain: str, family: int = socket.AF_INET) -> Optional[str]:
     """
     Резолвит домен в IP-адрес. До 2 попыток при сбое.
     family: socket.AF_INET для IPv4, socket.AF_INET6 для IPv6.

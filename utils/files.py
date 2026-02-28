@@ -3,6 +3,7 @@ import sys
 import json
 
 from cli.console import console
+from typing import List
 
 
 def get_exe_dir() -> str:
@@ -29,7 +30,7 @@ def get_resource_path(relative_path: str) -> str:
     return external
 
 
-def load_domains(filepath: str = "domains.txt") -> list[str]:
+def load_domains(filepath: str = "domains.txt") -> List[str]:
     full_path = get_resource_path(filepath)
 
     if not os.path.exists(full_path):
