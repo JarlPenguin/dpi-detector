@@ -1,185 +1,131 @@
 import os
 import ssl
 import asyncio
+import random
+import string
+import time
 from typing import Tuple, Optional
-
+import httpx
 import config
 
+# Предварительно генерируем пул случайных символов (100 КБ).
+# Это нужно, чтобы брать из него куски и делать каждый запрос уникальным (защита от кэша WAF),
+RANDOM_POOL = "".join(random.choices(string.ascii_letters + string.digits, k=100_000))
 
-def _make_tls_ctx() -> ssl.SSLContext:
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    return ctx
+async def _fat_probe_keepalive(
+    client: httpx.AsyncClient, ip: str, port: int, sni: Optional[str]
+) -> Tuple[str, str, str]:
 
+    scheme = "http" if port == 80 else "https"
+    url = f"{scheme}://{ip}:{port}/"
 
-async def _open_connection(ip: str, port: int, sni: Optional[str] = None):
-    """
-    port == 80 → plain TCP, иначе → TLS с server_hostname=sni.
-    Бросает исключения — вызывающий классифицирует сам.
-    """
-    if port == 80:
-        return await asyncio.wait_for(
-            asyncio.open_connection(ip, port),
-            timeout=config.FAT_CONNECT_TIMEOUT,
-        )
-    ctx = _make_tls_ctx()
-    return await asyncio.wait_for(
-        asyncio.open_connection(ip, port, ssl=ctx, server_hostname=sni),
-        timeout=config.FAT_CONNECT_TIMEOUT,
-    )
+    base_headers = {
+        "User-Agent": config.USER_AGENT,
+        "Connection": "keep-alive"
+    }
+    if sni:
+        base_headers["Host"] = sni
 
+    alive_str = "[dim]—[/dim]"
+    # 16 запросов по 4кб через 1 TCP соединение
+    chunks_count = 16
+    chunk_size = 4000
 
-def _build_short_request(ip: str, port: int) -> bytes:
-    host = ip if port in (80, 443) else f"{ip}:{port}"
-    return (
-        f"HEAD / HTTP/1.1\r\n"
-        f"Host: {host}\r\n"
-        f"Connection: close\r\n"
-        f"\r\n"
-    ).encode()
+    rtt_measurements = []
+    dynamic_timeout = None
 
+    for i in range(chunks_count):
+        # Берем уникальный кусок мусора для заголовка
+        start_idx = random.randint(0, len(RANDOM_POOL) - chunk_size - 1)
+        headers = base_headers.copy()
+        headers["X-Pad"] = RANDOM_POOL[start_idx:start_idx + chunk_size]
+        current_timeout = dynamic_timeout if dynamic_timeout is not None else config.FAT_READ_TIMEOUT
 
-def _build_fat_request(ip: str, port: int) -> bytes:
-    """GET-запрос с жирным заголовком X-Data размером FAT_HEADER_KB * 512 hex-байт."""
-    fat_value = os.urandom(config.FAT_HEADER_KB * 512).hex()
-    host = ip if port in (80, 443) else f"{ip}:{port}"
-    return (
-        f"GET / HTTP/1.1\r\n"
-        f"Host: {host}\r\n"
-        f"Connection: close\r\n"
-        f"X-Data: {fat_value}\r\n"
-        f"\r\n"
-    ).encode()
+        extensions = {}
+        if sni and port != 80:
+            extensions["sni_hostname"] = sni
 
+        start_time = time.time()
 
-def _parse_http_status(data: bytes) -> int:
-    if not data.startswith(b"HTTP/"):
-        return 0
-    parts = data.split(b" ", 2)
-    if len(parts) < 2:
-        return 0
-    try:
-        return int(parts[1])
-    except ValueError:
-        return 0
-
-
-async def _do_short(ip: str, port: int, sni: Optional[str] = None) -> Tuple[bool, str]:
-    """
-    HEAD-запрос для проверки живости хоста.
-    Возвращает (alive, alive_str). alive=True если получили любой HTTP-статус.
-    """
-    try:
-        reader, writer = await _open_connection(ip, port, sni)
-    except asyncio.TimeoutError:
-        return False, "No (timeout)"
-    except OSError as e:
-        # Разделяем refused и прочие сетевые ошибки для более понятного вывода
-        import errno as _errno
-        if e.errno in (_errno.ECONNREFUSED, config.WSAECONNREFUSED):
-            return False, "No (refused)"
-        return False, "No (conn err)"
-    except Exception:
-        return False, "No (conn err)"
-
-    try:
-        writer.write(_build_short_request(ip, port))
-        await asyncio.wait_for(writer.drain(), timeout=config.FAT_CONNECT_TIMEOUT)
         try:
-            chunk = await asyncio.wait_for(reader.read(512), timeout=config.FAT_READ_TIMEOUT)
-            status = _parse_http_status(chunk)
-            if status:
-                return True, f"Yes ({status})"
-            elif chunk:
-                return True, "Yes (non-HTTP)"
+            resp = await client.request(
+                "HEAD",
+                url,
+                headers=headers,
+                timeout=current_timeout,
+                extensions=extensions if extensions else None
+            )
+
+            elapsed = time.time() - start_time
+            status = resp.status_code
+
+            # Первый запрос используем как Alive-чек
+            if i == 0:
+                alive_str = f"Yes ({status})"
+                if status in (431, 414, 400):
+                    return alive_str, "[yellow]WARN[/yellow]", f"HTTP {status} (Header limits)"
+
+            # Расчет динамического таймаута по первым двум успешным запросам
+            if i < 2:
+                rtt_measurements.append(elapsed)
+                if len(rtt_measurements) == 2:
+                    base_rtt = max(rtt_measurements)
+                    dyn_t = max(base_rtt * 3.0, 1.5)
+                    dynamic_timeout = min(dyn_t, config.FAT_READ_TIMEOUT)
+
+            if "close" in resp.headers.get("Connection", "").lower():
+                if i < (chunks_count - 1):
+                    return alive_str, "[yellow]WARN[/yellow]", f"Keep-Alive dropped at {i*4}KB"
+
+            await asyncio.sleep(0.05)
+
+        except (httpx.ConnectTimeout, httpx.ConnectError) as e:
+            if i == 0:
+                if "refused" in str(e).lower() or "10061" in str(e):
+                    return "No", "[yellow]UNREACHABLE[/yellow]", "Refused"
+                return "No", "[yellow]UNREACHABLE[/yellow]", "Connect Err"
+            return alive_str, "[bold red]DETECTED[/bold red]", f"Conn Err at {i*4}KB"
+
+        except (httpx.ReadTimeout, httpx.WriteTimeout) as e:
+            if i == 0:
+                return "No", "[red]ERR[/red]", "Timeout"
+            return alive_str, "[bold red]DETECTED[/bold red]", f"Blackhole at {i*4}KB"
+
+        except (httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError) as e:
+            if i == 0:
+                return "No", "[red]ERR[/red]", type(e).__name__
+
+            err_str = str(e).lower()
+            if "reset" in err_str or "10054" in err_str:
+                tag = "TCP RST"
+            elif "abort" in err_str or "10053" in err_str:
+                tag = "TCP ABORT"
+            elif "eof" in err_str or "closed" in err_str:
+                tag = "TCP FIN"
             else:
-                return False, "No (empty)"
-        except asyncio.TimeoutError:
-            return False, "No (timeout)"
-    except Exception:
-        return False, "No (err)"
-    finally:
-        try:
-            writer.close()
-        except Exception:
-            pass
+                tag = "Drop"
 
+            return alive_str, "[bold red]DETECTED[/bold red]", f"{tag} at {i*4}KB"
 
-async def _do_fat(ip: str, port: int, sni: Optional[str] = None) -> Tuple[str, str]:
-    """
-    GET с жирным заголовком (~64KB). Отправляем чанками, чтобы знать точку обрыва.
-    Возвращает (status, detail).
-    """
-    try:
-        reader, writer = await _open_connection(ip, port, sni)
-    except asyncio.TimeoutError:
-        return "[red]TIMEOUT[/red]", "Handshake timeout"
-    except ssl.SSLError as e:
-        return "[red]TLS ERR[/red]", f"TLS: {str(e)[:40]}"
-    except ConnectionRefusedError:
-        return "[red]REFUSED[/red]", "Connection refused"
-    except OSError as e:
-        return "[red]OS ERR[/red]", f"errno={e.errno}"
-    except Exception as e:
-        return "[red]ERR[/red]", type(e).__name__
+        except Exception as e:
+            if i == 0:
+                return "No", "[red]ERR[/red]", f"{type(e).__name__}"
+            return alive_str, "[red]ERR[/red]", f"{type(e).__name__} at {i*4}KB"
 
-    bytes_sent = 0
-    try:
-        payload = _build_fat_request(ip, port)
-        total = len(payload)
-        offset = 0
-
-        try:
-            while offset < total:
-                end = min(offset + 4096, total)
-                writer.write(payload[offset:end])
-                await asyncio.wait_for(writer.drain(), timeout=config.FAT_READ_TIMEOUT)
-                bytes_sent += end - offset
-                offset = end
-        except asyncio.TimeoutError:
-            kb = bytes_sent // 1024
-            return "[bold red]DETECTED[/bold red]", f"Dropped (timeout) at {kb}KB"
-        except (ConnectionResetError, BrokenPipeError, OSError) as e:
-            kb = bytes_sent // 1024
-            tag = "RST" if "reset" in str(e).lower() else "write err"
-            return "[bold red]DETECTED[/bold red]", f"Dropped ({tag}) at {kb}KB — TCP RST"
-
-        try:
-            chunk = await asyncio.wait_for(reader.read(512), timeout=config.FAT_READ_TIMEOUT)
-            if _parse_http_status(chunk) or chunk:
-                return "[green]OK[/green]", f"{bytes_sent // 1024}/{config.FAT_HEADER_KB}KB sent"
-            else:
-                kb = bytes_sent // 1024
-                return "[bold red]DETECTED[/bold red]", f"Dropped (FIN) at {kb}KB — no response"
-        except asyncio.TimeoutError:
-            kb = bytes_sent // 1024
-            return "[bold red]DETECTED[/bold red]", f"Dropped (timeout) at {kb}KB — no response"
-        except (ConnectionResetError, OSError):
-            kb = bytes_sent // 1024
-            return "[bold red]DETECTED[/bold red]", f"Dropped (RST) at {kb}KB — TCP RST"
-
-    except Exception as e:
-        return "[red]ERR[/red]", f"{type(e).__name__} at {bytes_sent // 1024}KB"
-    finally:
-        try:
-            writer.close()
-        except Exception:
-            pass
-
-
-async def _fat_probe(ip: str, port: int, sni: Optional[str] = None) -> Tuple[str, str, str]:
-    """SHORT alive-check → если жив, FAT-проверка. Возвращает (alive_str, status, detail)."""
-    alive, alive_str = await _do_short(ip, port, sni)
-    if not alive:
-        return alive_str, "[yellow]UNREACHABLE[/yellow]", "Host not responding"
-    fat_status, fat_detail = await _do_fat(ip, port, sni)
-    return alive_str, fat_status, fat_detail
+    return alive_str, "[green]OK[/green]", "Passed DPI"
 
 
 async def check_tcp_16_20(
     ip: str, port: int, sni: Optional[str], semaphore: asyncio.Semaphore
 ) -> Tuple[str, str, str]:
-    """Одна fat-probe попытка. Возвращает (alive_str, status, detail)."""
     async with semaphore:
-        return await _fat_probe(ip, port, sni)
+        verify_ctx = ssl.create_default_context()
+        verify_ctx.check_hostname = False
+        verify_ctx.verify_mode = ssl.CERT_NONE
+
+        # max_keepalive_connections=1 гарантирует, что httpx будет пытаться
+        # переиспользовать один и тот же сокет для всех запросов к одному IP
+        limits = httpx.Limits(max_keepalive_connections=1, max_connections=1)
+
+        async with httpx.AsyncClient(verify=verify_ctx, http2=False, limits=limits) as client:
+            return await _fat_probe_keepalive(client, ip, port, sni)
