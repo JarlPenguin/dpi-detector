@@ -1,7 +1,7 @@
 <p align="center">
   <img src="https://raw.githubusercontent.com/Runnin4ik/dpi-detector/main/images/logo.jpg" width="100%">
   <br>
-  <i>«Маяк на скале у гаснущего горизонта свободного интернета»</i><br>
+  <i>«Маяк у гаснущего горизонта свободного интернета»</i><br>
   Сквозь цифровые сумерки. Смотритель маяка, <a href="https://github.com/Runnin4ik"><b>Runni</b></a>
 </p>
 
@@ -29,7 +29,7 @@
 
 1.  `domains.txt` — список доменов для проверки.
 2.  `tcp16.json` — цели для теста TCP 16-20KB.
-3.  `config.py` — параметры таймаутов, макс. соединений...
+3.  `config.py` — конфигурация.
 
 ## 🐋 Docker (Рекомендовано)
 
@@ -119,6 +119,21 @@ python dpi_detector.py
 
 - Проекту [hyperion-cs/dpi-checkers](https://github.com/hyperion-cs/dpi-checkers) за вдохновение
 - **0ka** за помощь и консультации
+
+## 💖 Поддержка 
+
+### [Чаевые картой или по СБП](https://pay.cloudtips.ru/p/1421d4c7)
+
+| Валюта   | Сеть   | Адрес                                              |
+|----------|--------|----------------------------------------------------|
+| **USDT** | TRC20  | `TGtcb4JMT5F3KiEL16oZnj9ijB2Pag1jCX`               |
+| **USDT** | ERC20  | `0x97413028546b5da4cbba4d9838c9d635a5333ab1`       |
+| **USDT** | TON    | `UQApgV57_p0hQGBV9oxrDi7SvKqgN3pigw5YEA28VShrZ7X_` |
+| **TON**  |        | `UQApgV57_p0hQGBV9oxrDi7SvKqgN3pigw5YEA28VShrZ7X_` |
+| **BNB**  | BEP-20 | `0x97413028546b5da4cbba4d9838c9d635a5333ab1`       |
+| **SOL**  |        | `9obMiD8hYfs4D8XskQjHPPtAKYPq9CaEZTbBMxtCjQ3k`     |
+| **BTC**  |        | `bc1q7579xpmxcrz34lzmrxfupkpcczvemeqk2e9f4h`       |
+| **ETH**  |        | `0x97413028546b5da4cbba4d9838c9d635a5333ab1`       |
 
 ## Star History
 
