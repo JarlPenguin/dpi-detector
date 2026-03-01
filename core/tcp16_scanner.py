@@ -27,7 +27,6 @@ async def _fat_probe_keepalive(
         base_headers["Host"] = sni
 
     alive_str = "[dim]—[/dim]"
-    # 16 запросов по 4кб через 1 TCP соединение
     chunks_count = 16
     chunk_size = 4000
 
@@ -40,7 +39,6 @@ async def _fat_probe_keepalive(
 
     for i in range(chunks_count):
         headers = base_headers.copy()
-
         # i=0 — чистый запрос без X-Pad: только проверяем что сервер живой.
         # i>=1 — добавляем мусор
         if i > 0:
@@ -48,25 +46,20 @@ async def _fat_probe_keepalive(
             headers["X-Pad"] = RANDOM_POOL[start_idx:start_idx + chunk_size]
 
         current_timeout = dynamic_timeout if dynamic_timeout is not None else config.FAT_READ_TIMEOUT
-
         start_time = time.time()
 
         try:
             resp = await client.request(
-                "HEAD",
-                url,
-                headers=headers,
+                "HEAD", url, headers=headers,
                 timeout=current_timeout,
                 extensions=extensions if extensions else None
             )
 
             elapsed = time.time() - start_time
-            status = resp.status_code
 
             if i == 0:
-                alive_str = f"Yes ({status})"
+                alive_str = f"[green]Да[/green]" #({resp.status_code})
 
-            # Динамический таймаут по первым двум успешным запросам
             if i < 2:
                 rtt_measurements.append(elapsed)
                 if len(rtt_measurements) == 2:
@@ -74,31 +67,23 @@ async def _fat_probe_keepalive(
                     dyn_t = max(base_rtt * 3.0, 1.5)
                     dynamic_timeout = min(dyn_t, config.FAT_READ_TIMEOUT)
 
-            if "close" in resp.headers.get("Connection", "").lower():
-                if i == 0:
-                    # Сервер не держит keep-alive — нельзя тестировать
-                    return alive_str, "[yellow]WARN[/yellow]", "No keep-alive"
-                if i < (chunks_count - 1):
-                    # Закрыл соединение после того как пошёл мусор — блокировка
-                    return alive_str, "[bold red]DETECTED[/bold red]", f"Conn closed at {i*4}KB"
-
             await asyncio.sleep(0.05)
 
         except (httpx.ConnectTimeout, httpx.ConnectError) as e:
             if i == 0:
                 if "refused" in str(e).lower() or "10061" in str(e):
-                    return "No", "[yellow]UNREACHABLE[/yellow]", "Refused"
-                return "No", "[yellow]UNREACHABLE[/yellow]", "Connect Err"
+                    return "[red]Нет[/red]", "[red]REFUSED[/red]", "Refused"
+                return "[red]Нет[/red]", "[red]CONN ERR[/red]", "Connect Error"
             return alive_str, "[bold red]DETECTED[/bold red]", f"Conn Err at {i*4}KB"
 
-        except (httpx.ReadTimeout, httpx.WriteTimeout) as e:
+        except (httpx.ReadTimeout, httpx.WriteTimeout):
             if i == 0:
-                return "No", "[red]ERR[/red]", "Timeout"
+                return "[red]Нет[/red]", "[red]ERR[/red]", "Timeout"
             return alive_str, "[bold red]DETECTED[/bold red]", f"Blackhole at {i*4}KB"
 
         except (httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError) as e:
             if i == 0:
-                return "No", "[red]ERR[/red]", type(e).__name__
+                return "[red]Нет[/red]", "[red]ERR[/red]", type(e).__name__
 
             err_str = str(e).lower()
             if "reset" in err_str or "10054" in err_str:
@@ -114,10 +99,10 @@ async def _fat_probe_keepalive(
 
         except Exception as e:
             if i == 0:
-                return "No", "[red]ERR[/red]", f"{type(e).__name__}"
+                return "[red]Нет[/red]", "[red]ERR[/red]", f"{type(e).__name__}"
             return alive_str, "[red]ERR[/red]", f"{type(e).__name__} at {i*4}KB"
 
-    return alive_str, "[green]OK[/green]", "Passed DPI"
+    return alive_str, "[green]OK[/green]", ""
 
 
 async def check_tcp_16_20(
