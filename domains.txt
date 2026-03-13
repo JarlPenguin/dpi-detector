@@ -31,11 +31,11 @@ www.themoscowtimes.com
 www.linuxserver.io
 danbooru.donmai.us
 gelbooru.com/script/application.grid.js
-www.browserleaks.com
+browserleaks.com
 www.cdn77.com
 shikimori.one
 mos-gorsud.co
 kinopub.online
 kino.pub
 vk.ru
-google.com
+www.google.com
