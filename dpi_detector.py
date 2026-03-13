@@ -196,30 +196,6 @@ async def main():
     run_domains = "2" in selection
     run_tcp     = "3" in selection
     run_wl_sni  = "4" in selection
-    show_legend = "5" in selection
-
-    if show_legend and not any([run_dns, run_domains, run_tcp, run_wl_sni]):
-        print_legend()
-        if args.batch:
-            break
-        console.print(
-            "\nНажмите [bold green]Enter[/bold green] для возврата в меню "
-            "или [bold red]Ctrl+C[/bold red] для выхода"
-        )
-        _flush_stdin()
-        try:
-            await _readline_cancelable()
-        except KeyboardInterrupt:
-            raise
-        # Повторно спрашиваем выбор
-        if not args.batch:
-            selection = await ask_test_selection()
-            run_dns     = "1" in selection
-            run_domains = "2" in selection
-            run_tcp     = "3" in selection
-            run_wl_sni  = "4" in selection
-            show_legend = "5" in selection
-        console.print()
 
     save_to_file = False
     result_path  = None
@@ -239,23 +215,20 @@ async def main():
             raise
 
     semaphore = asyncio.Semaphore(config.MAX_CONCURRENT)
-    first_run = True
 
     while True:
         # ── DNS ───────────────────────────────────────────────────────────────
-        if not any([run_dns, run_domains, run_tcp, run_wl_sni]):
-            break
         stub_ips: set = set()
         dns_intercept_count = 0
         doh_unavailable = False
 
-        if run_dns and config.DNS_CHECK_ENABLED:
+        if run_dns:
             stub_ips, dns_intercept_count, doh_unavailable = await check_dns_integrity()
-        elif config.DNS_CHECK_ENABLED and (run_domains or run_tcp):
+        elif run_domains or run_tcp:
             try:
                 stub_ips = await asyncio.wait_for(
                     collect_stub_ips_silently(),
-                    timeout=config.STUB_IPS_TIMEOUT  # или вынести в config.py
+                    timeout=config.STUB_IPS_TIMEOUT
                 )
             except asyncio.TimeoutError:
                 stub_ips = set()
@@ -293,10 +266,6 @@ async def main():
             expand=False,
         ))
 
-
-        if first_run:
-            print_legend()
-            first_run = False
 
         console.print("\n[bold green]Проверка завершена.[/bold green]")
 

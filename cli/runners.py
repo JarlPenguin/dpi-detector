@@ -282,6 +282,7 @@ async def run_tcp_test(semaphore: asyncio.Semaphore, tcp_items: list) -> dict:
 # ── Тест 4: Поиск белых SNI для ASN ──────────────────────────────────────────
 
 _SNI_BATCH_SIZE = 5
+_SNI_TOP_N = 3
 
 
 async def run_whitelist_sni_test(semaphore: asyncio.Semaphore, tcp_items: list, whitelist_sni: list) -> None:
@@ -377,104 +378,119 @@ async def run_whitelist_sni_test(semaphore: asyncio.Semaphore, tcp_items: list, 
         console.print("[green]Ни одна AS не заблокирована — перебор SNI не нужен.[/green]")
         return
 
+
+    total_sni  = len(clean_sni_list)
+    print_lock = asyncio.Lock()
+
     console.print(
-        f"[dim]Фаза 2/2: Перебор SNI для {len(detected_rows)} AS "
-        f"(батч {_SNI_BATCH_SIZE}, таймаут динамический)...[/dim]\n"
+        f"[dim]Фаза 2/2: Параллельный перебор SNI для {len(detected_rows)} AS "
+        f"(батч {_SNI_BATCH_SIZE}, топ-{_SNI_TOP_N})...[/dim]\n"
     )
 
-    total_sni = len(clean_sni_list)
-    found_count = 0
-    _PROGRESS_WIDTH = 78
-
-    def _print_progress(text: str) -> None:
-        """Перезаписывает текущую строку. Не попадает в rich-буфер отчёта."""
-        line = text[:_PROGRESS_WIDTH].ljust(_PROGRESS_WIDTH)
-        sys.stderr.write(f"\r{line}")
-        sys.stderr.flush()
-
-    def _clear_progress() -> None:
-        sys.stderr.write(f"\r{' ' * _PROGRESS_WIDTH}\r")
-        sys.stderr.flush()
-
-    # ── Перебор SNI для каждой AS последовательно ────────────────────────────
-    for row in sorted(detected_rows, key=lambda r: r["provider"].lower()):
+    # ── Воркер одной AS ──────────────────────────────────────────────────────
+    async def _probe_as(row: dict) -> bool:
+        """Перебирает SNI для одной AS параллельно. Возвращает True если найден хоть один."""
         ip       = row["item"]["ip"]
-        row_id   = row["id"]
         asn_str  = row["asn_str"]
         provider = row["provider"]
         hint     = row["rtt"]
 
-        _print_progress(f"  {provider} ({asn_str}): проверка без SNI...")
+        found: list      = []   # (label, num)
+        ban_detected     = False
+        ban_detail       = ""
 
         # Шаг 0: без SNI
         try:
-            _a, st0, _d = await check_tcp_16_20(ip, 443, "", semaphore, hint_rtt=hint)
+            _a, st0, d0 = await check_tcp_16_20(ip, 443, "", semaphore, hint_rtt=hint)
             if "OK" in st0:
-                _clear_progress()
-                console.print(
-                    f"  [cyan]{provider}[/cyan] [dim]{asn_str}[/dim]  "
-                    f"[bold green]✓ (без SNI)[/bold green]"
-                )
-                found_count += 1
-                continue
+                found.append(("(без SNI)", 0))
+            elif "DETECTED" not in st0 and "at " not in d0:
+                ban_detected = True
+                ban_detail   = st0
         except Exception:
             pass
 
-        # Перебор батчами
-        batches = [
-            clean_sni_list[i:i + _SNI_BATCH_SIZE]
-            for i in range(0, total_sni, _SNI_BATCH_SIZE)
-        ]
+        if len(found) < _SNI_TOP_N and not ban_detected:
+            batches = [
+                clean_sni_list[i:i + _SNI_BATCH_SIZE]
+                for i in range(0, total_sni, _SNI_BATCH_SIZE)
+            ]
 
-        found_sni: str | None = None
-
-        for batch in batches:
-            first_num = sni_index.get(batch[0], "?")
-            last_num  = sni_index.get(batch[-1], "?")
-            _print_progress(
-                f"  {provider} ({asn_str}): SNI #{first_num}–#{last_num} из {total_sni}..."
-            )
-
-            async def _one(sni: str):
-                a, s, d = await check_tcp_16_20(ip, 443, sni, semaphore, hint_rtt=hint)
-                return sni, s
-
-            results = await asyncio.gather(
-                *[_one(sni) for sni in batch],
-                return_exceptions=True
-            )
-
-            for sni in batch:
-                for res in results:
-                    if isinstance(res, tuple) and res[0] == sni and "OK" in res[1]:
-                        found_sni = sni
-                        break
-                if found_sni:
+            for batch in batches:
+                if len(found) >= _SNI_TOP_N:
                     break
 
-            if found_sni:
-                break
+                async def _one(sni: str):
+                    _a, s, d = await check_tcp_16_20(ip, 443, sni, semaphore, hint_rtt=hint)
+                    return sni, s, d
 
-        _clear_progress()
+                results = await asyncio.gather(
+                    *[_one(sni) for sni in batch],
+                    return_exceptions=True
+                )
 
-        if found_sni:
-            sni_num  = sni_index.get(found_sni, 0)
-            safe_sni = found_sni.replace(".", "\u200b.")
-            console.print(
-                f"  [cyan]{provider}[/cyan] [dim]{asn_str}[/dim]  "
-                f"[bold green]✓ {safe_sni}[/bold green] [dim]#{sni_num}[/dim]"
-            )
-            found_count += 1
-        else:
-            console.print(
-                f"  [cyan]{provider}[/cyan] [dim]{asn_str}[/dim]  "
-                f"[red]✗ SNI не найден[/red]"
-            )
+                # Если весь батч — connect-level (нет "at Xkb" и не DETECTED) — бан
+                connect_fails = sum(
+                    1 for res in results
+                    if not isinstance(res, tuple)
+                    or ("OK" not in res[1] and "DETECTED" not in res[1] and "at " not in res[2])
+                )
+                if connect_fails == len(batch):
+                    ban_detected = True
+                    for res in results:
+                        if isinstance(res, tuple):
+                            ban_detail = res[1]
+                            break
+                    break
+
+                # Собираем OK в порядке файла
+                for sni in batch:
+                    if len(found) >= _SNI_TOP_N:
+                        break
+                    for res in results:
+                        if isinstance(res, tuple) and res[0] == sni and "OK" in res[1]:
+                            found.append((sni, sni_index.get(sni, 0)))
+                            break
+
+        async with print_lock:
+            if found:
+                parts = []
+                for label, n in found:
+                    safe  = label.replace(".", "\u200b.")
+                    n_str = f" [dim]#{n}[/dim]" if n else ""
+                    parts.append(f"[bold green]{safe}[/bold green]{n_str}")
+                suffix = "  [dim yellow]⚠ бан после[/dim yellow]" if ban_detected else ""
+                console.print(
+                    f"  [cyan]{provider}[/cyan] [dim]{asn_str}[/dim]  "
+                    f"[green]✓[/green] {'  '.join(parts)}{suffix}"
+                )
+            elif ban_detected:
+                import re as _re
+                clean_st = _re.sub(r'\[.*?\]', '', ban_detail).strip()
+                console.print(
+                    f"  [cyan]{provider}[/cyan] [dim]{asn_str}[/dim]  "
+                    f"[yellow]⚠ бан/рейт-лимит[/yellow] [dim]({clean_st})[/dim]"
+                )
+            else:
+                console.print(
+                    f"  [cyan]{provider}[/cyan] [dim]{asn_str}[/dim]  "
+                    f"[red]✗ SNI не найден[/red] [dim](все заблокированы)[/dim]"
+                )
+
+        return bool(found)
+
+    # ── Запускаем все AS параллельно ─────────────────────────────────────────
+    probe_results = await asyncio.gather(
+        *[_probe_as(row) for row in sorted(detected_rows, key=lambda r: r["provider"].lower())],
+        return_exceptions=True
+    )
+
+    found_count = sum(1 for r in probe_results if r is True)
 
     console.print()
     if found_count > 0:
         console.print(
-            f"[green]Найдено белых SNI: {found_count} из {len(detected_rows)} заблокированных AS[/green]"
+            f"[green]Найдено белых SNI: у {found_count} из {len(detected_rows)} заблокированных AS[/green]"
         )
     else:
         console.print(
