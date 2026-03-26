@@ -22,7 +22,6 @@
 
     {"id": "CDN-05", "asn": "212238", "provider": "CDN77 #2", "ip": "82.27.130.121", "port": 443},
     {"id": "CDN-06", "asn": "212238", "provider": "CDN77 #2", "ip": "194.32.146.68", "port": 443},
-    {"id": "CDN-07", "asn": "212238", "provider": "CDN77 #2", "ip": "173.211.70.143", "port": 443},
 
     {"id": "AK-01", "asn": "20940☆", "provider": "Akamai 1", "ip": "23.222.76.4", "port": 443},
     {"id": "AK-02", "asn": "20940☆", "provider": "Akamai 1", "ip": "23.46.144.6", "port": 443},
@@ -74,11 +73,8 @@
     {"id": "OR-03", "asn": "31898", "provider": "Oracle Cloud", "ip": "132.145.253.77", "port": 443},
     {"id": "OR-04", "asn": "31898", "provider": "Oracle Cloud", "ip": "158.180.238.77", "port": 443},
 
-    {"id": "OR-05", "asn": "54253", "provider": "Oracle 1 HTTP", "ip": "79.72.37.28", "port": 80},
     {"id": "OR-06", "asn": "54253", "provider": "Oracle 1", "ip": "158.178.160.240", "port": 443},
     {"id": "OR-07", "asn": "54253", "provider": "Oracle 1", "ip": "217.142.192.157", "port": 443},
-
-    {"id": "OR-09", "asn": "1219", "provider": "Oracle 2", "ip": "156.151.59.19", "port": 443},
 
     {"id": "OR-10", "asn": "6142", "provider": "Oracle 3", "ip": "139.87.83.30", "port": 443},
     {"id": "OR-11", "asn": "6142", "provider": "Oracle 3", "ip": "139.87.117.158", "port": 443},
@@ -99,11 +95,9 @@
     {"id": "SW-04", "asn": "12876", "provider": "Scaleway 1 HTTP", "ip": "163.172.223.99", "port": 80},
     {"id": "SW-05", "asn": "29447", "provider": "Scaleway 2", "ip": "81.56.227.171", "port": 443},
     {"id": "SW-06", "asn": "29447", "provider": "Scaleway 2", "ip": "83.158.240.200", "port": 443},
-    {"id": "SW-07", "asn": "29447", "provider": "Scaleway 2", "ip": "81.56.11.201", "port": 443},
 
     {"id": "DO-01", "asn": "14061", "provider": "DigitalOcean 1", "ip": "157.230.91.62", "port": 443},
     {"id": "DO-02", "asn": "14061", "provider": "DigitalOcean 1", "ip": "138.68.63.162", "port": 443},
-    {"id": "DO-03", "asn": "14061", "provider": "DigitalOcean 1", "ip": "159.203.180.157", "port": 443},
     {"id": "DO-04", "asn": "14061", "provider": "DigitalOcean 1", "ip": "147.182.168.41", "port": 443},
     {"id": "DO-05", "asn": "14061", "provider": "DigitalOcean 1", "ip": "45.55.107.70", "port": 443},
 
@@ -118,7 +112,6 @@
     {"id": "MBC-01", "asn": "8849", "provider": "Melbicom 1", "ip": "193.35.224.194", "port": 443},
     {"id": "MBC-03", "asn": "56630", "provider": "Melbicom 2", "ip": "185.6.14.1", "port": 443},
 
-    {"id": "FT-01", "asn": "53667", "provider": "FranTech", "ip": "104.244.74.134", "port": 443},
     {"id": "FT-02", "asn": "53667", "provider": "FranTech", "ip": "198.251.88.98", "port": 443},
 
     {"id": "СV-01", "asn": "62240", "provider": "Clouvider", "ip": "130.185.249.20", "port": 443},
