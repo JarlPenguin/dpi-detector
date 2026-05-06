@@ -15,10 +15,9 @@ www.euronews.com
 www.torproject.org
 proton.me
 protonvpn.com
-roskomsvoboda.org/ru/
 amnezia.org
 nnmclub.to
-rezka.ag
+standby-rezka.tv
 hub.docker.com
 www.intel.com
 www.canva.com
@@ -33,7 +32,7 @@ danbooru.donmai.us
 gelbooru.com/script/application.grid.js
 browserleaks.com
 www.cdn77.com
-shikimori.one
+shikimori.io
 mos-gorsud.co
 kinopub.online
 kino.pub
