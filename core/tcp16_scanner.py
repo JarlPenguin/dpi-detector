@@ -123,7 +123,7 @@ async def _fat_probe_keepalive(
 
         except Exception as e:
             # Для ReadError, WriteError, RemoteProtocolError и любых других
-            label, detail, _ = classify_read_error(e, 0)
+            label, detail, _ = classify_read_error(e, 0, stage=connection_state["stage"])
             if i == 0:
                 return "[green]Да[/green]", label, detail, measured_rtt
             return alive_str, "[bold red]DETECTED[/bold red]", f"{detail} at {i*4}KB", measured_rtt

@@ -14,6 +14,7 @@ from utils import config
 from utils.error_classifier import (
     classify_ssl_error, classify_connect_error, classify_read_error,
     collect_error_text, find_cause, get_errno_from_chain,
+    get_exception_chain_full
 )
 
 
@@ -62,6 +63,12 @@ def create_dpi_client(tls_version: str = None, ipv6: bool = False) -> httpx.Asyn
         trust_env=False
     )
 
+def log_debug_error(domain: str, stage: str, exc: Exception):
+    """Вспомогательная функция для записи ошибки в файл."""
+    full_info = get_exception_chain_full(exc)
+    timestamp = time.strftime('%H:%M:%S')
+    with open("debug_errors.log", "a", encoding="utf-8") as f:
+        f.write(f"[{timestamp}] {domain:<20} | STAGE: {stage:<15} | {full_info}\n")
 
 async def _check_tls_single(
     domain: str,
@@ -164,10 +171,12 @@ async def _check_tls_single(
                 return ("[green]OK[/green]", f"HTTP {status_code}", bytes_read, elapsed)
 
         except (httpx.ConnectTimeout, httpx.ConnectError) as e:
+            #log_debug_error(domain, connection_state["stage"], e)
             label, detail, br = classify_connect_error(e, bytes_read, stage=connection_state["stage"])
             return (label, detail, br, time.time() - start)
 
         except httpx.ReadTimeout:
+            #log_debug_error(domain, connection_state["stage"], e)
             kb_read = math.ceil(bytes_read / 1024)
             elapsed = time.time() - start
             if config.TCP_BLOCK_MIN_KB <= kb_read <= config.TCP_BLOCK_MAX_KB:
@@ -177,17 +186,22 @@ async def _check_tls_single(
             return ("[red]TIMEOUT[/red]", "Read timeout", bytes_read, elapsed)
 
         except ssl.SSLError as e:
-            label, detail, br = classify_ssl_error(e, bytes_read)
+            #log_debug_error(domain, connection_state["stage"], e)
+            label, detail, br = classify_ssl_error(e, bytes_read, stage=connection_state["stage"])
             return (label, detail, br, time.time() - start)
 
         except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError) as e:
-            label, detail, br = classify_read_error(e, bytes_read)
+            #log_debug_error(domain, connection_state["stage"], e)
+            label, detail, br = classify_read_error(e, bytes_read, stage=connection_state["stage"])
             return (label, detail, br, time.time() - start)
 
         except OSError as e:
+            #log_debug_error(domain, connection_state["stage"], e)
             elapsed = time.time() - start
             en = e.errno
             if en in (errno.ECONNRESET, config.WSAECONNRESET):
+                if connection_state["stage"] == "tls_handshake":
+                    return ("[bold red]TLS RST[/bold red]", "Активный сброс (TCP RST)", bytes_read, elapsed)
                 return ("[bold red]TCP RST[/bold red]", "OS conn reset", bytes_read, elapsed)
             elif en in (errno.ECONNREFUSED, config.WSAECONNREFUSED):
                 return ("[bold red]REFUSED[/bold red]", "OS conn refused", bytes_read, elapsed)
@@ -197,6 +211,7 @@ async def _check_tls_single(
                 return ("[red]OS ERR[/red]", f"errno={en}", bytes_read, elapsed)
 
         except Exception as e:
+            #log_debug_error(domain, connection_state["stage"], e)
             return ("[red]ERR[/red]", f"{type(e).__name__}", bytes_read, time.time() - start)
 
 
@@ -281,13 +296,16 @@ async def check_http_injection(
         return ("[green]OK[/green]", f"{status_code}")
 
     except (httpx.ConnectTimeout, httpx.ConnectError) as e:
-            label, detail, _ = classify_connect_error(e, 0, stage=connection_state["stage"])
-            return (label, detail)
+        #log_debug_error(domain, connection_state["stage"], e)
+        label, detail, _ = classify_connect_error(e, 0, stage=connection_state["stage"])
+        return (label, detail)
 
     except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as e:
+        #log_debug_error(domain, connection_state["stage"], e)
         err_type = type(e).__name__.replace("Timeout", "").upper() + " TIMEOUT"
         return (f"[red]{err_type}[/red]", "Timeout")
 
     except (httpx.ReadError, httpx.RemoteProtocolError, Exception) as e:
+        #log_debug_error(domain, connection_state["stage"], e)
         label, detail, _ = classify_read_error(e, 0)
         return (label, detail)

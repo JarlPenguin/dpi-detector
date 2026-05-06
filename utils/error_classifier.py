@@ -65,86 +65,52 @@ def clean_detail(detail: str) -> str:
 
 # ── Классификаторы ошибок ─────────────────────────────────────────────────────
 
-def classify_ssl_error(error: ssl.SSLError, bytes_read: int) -> Tuple[str, str, int]:
+def classify_ssl_error(error: ssl.SSLError, bytes_read: int, stage: str = "unknown") -> Tuple[str, str, int]:
     msg = str(error).lower()
+    full_text = collect_error_text(error)
 
-    # DPI: обрыв handshake / передачи данных
-    dpi_interruption = [
-        "eof", "unexpected eof", "eof occurred in violation",
-        "operation did not complete", "bad record mac",
-        "decryption failed", "decrypt"
-    ]
-    if any(m in msg for m in dpi_interruption):
-        detail = "Обрыв при передаче" if bytes_read > 0 else "Handshake aborted"
-        return ("[bold red]TLS DPI[/bold red]", detail, bytes_read)
-
-    # DPI: манипуляции с handshake
-    if any(x in msg for x in [
-        "illegal parameter", "decode error", "decoding error",
-        "record overflow", "oversized",
-        "record layer failure", "record_layer_failure",
-        "bad key share", "bad_key_share"
-    ]):
-        if "bad key share" in msg or "bad_key_share" in msg:
-            return ("[yellow]SSL ERR[/yellow]", "Bad key share", bytes_read)
-        if "record layer failure" in msg or "record_layer_failure" in msg:
-            return ("[yellow]SSL ERR[/yellow]", "Record layer fail", bytes_read)
-        return ("[bold red]TLS DPI[/bold red]", "Подмена handshake", bytes_read)
-
-    if "unrecognized name" in msg or "unrecognized_name" in msg:
-        return ("[bold red]TLS DPI[/bold red]", "SNI блок", bytes_read)
-
-    if "alert handshake" in msg or "sslv3_alert_handshake" in msg:
-        return ("[bold red]TLS DPI[/bold red]", "Handshake alert", bytes_read)
-
-    if "handshake" in msg:
-        if "unexpected" in msg:
-            return ("[bold red]TLS DPI[/bold red]", "HS подмена", bytes_read)
-        elif "failure" in msg:
-            return ("[bold red]TLS DPI[/bold red]", "HS failure", bytes_read)
+    if "pop from an empty deque" in full_text or "brokenresourceerror" in full_text:
+        return ("[bold red]TLS RST[/bold red]", "Активный сброс (TCP RST)", bytes_read)
 
     if "wrong version number" in msg:
-        return ("[bold red]TLS DPI[/bold red]", "Non-TLS ответ", bytes_read)
+        return ("[bold red]TLS SPOOF[/bold red]", "Подмена ответа (Wrong Version)", bytes_read)
+    if any(x in msg for x in ["record overflow", "oversized", "record layer failure", "decode error", "decoding error", "illegal parameter"]):
+        return ("[bold red]TLS SPOOF[/bold red]", "Подмена ответа (Garbage Data)", bytes_read)
 
-    # MITM: проблемы с сертификатом
-    if isinstance(error, ssl.SSLCertVerificationError):
+    if "alert" in msg:
+        if "unrecognized_name" in msg or "unrecognized name" in msg:
+            return ("[bold red]TLS ALERT[/bold red]", "SNI Block (Unrecognized Name)", bytes_read)
+        if "handshake_failure" in msg or "handshake failure" in msg:
+            return ("[bold red]TLS ALERT[/bold red]", "DPI Alert (Handshake Failure)", bytes_read)
+        if "protocol_version" in msg:
+            # Если мы проверяем TLS 1.3, а прилетает этот алерт - возможно, блок версии
+            return ("[bold red]TLS BLOCK[/bold red]", "Protocol Version Alert", bytes_read)
+        return ("[bold red]TLS ALERT[/bold red]", "Поддельный TLS Alert", bytes_read)
+
+    dpi_interruption = ["eof", "unexpected eof", "eof occurred", "operation did not complete", "want_read"]
+    if any(m in msg for m in dpi_interruption):
+        # Если это произошло во время хендшейка - в 99% это активный RST, замаскированный ОС под EOF
+        if bytes_read == 0 or stage == "tls_handshake":
+            return ("[bold red]TLS RST[/bold red]", "Активный сброс (TCP RST)", bytes_read)
+
+        detail = "Обрыв при передаче (EOF)" if bytes_read > 0 else "Тихий обрыв (Handshake EOF)"
+        return ("[bold red]TLS EOF[/bold red]", detail, bytes_read)
+
+    if isinstance(error, ssl.SSLCertVerificationError) or "certificate" in msg or "unknown ca" in msg:
         verify_code = getattr(error, 'verify_code', None)
         if verify_code == 10 or "expired" in msg:
             return ("[bold red]TLS MITM[/bold red]", "Cert expired", bytes_read)
-        elif verify_code in (18, 19) or "self-signed" in msg or "self signed" in msg:
+        elif verify_code in (18, 19) or "self-signed" in msg:
             return ("[bold red]TLS MITM[/bold red]", "Self-signed cert", bytes_read)
-        elif verify_code == 20 or "unknown ca" in msg:
-            return ("[bold red]TLS MITM[/bold red]", "Unknown CA", bytes_read)
         elif verify_code == 62 or "hostname mismatch" in msg:
             return ("[bold red]TLS MITM[/bold red]", "Hostname mismatch", bytes_read)
-        else:
-            return ("[bold red]TLS MITM[/bold red]", "Cert fail", bytes_read)
-
-    if "certificate" in msg:
-        if "verify failed" in msg or "unknown ca" in msg:
-            return ("[bold red]TLS MITM[/bold red]", "Unknown CA", bytes_read)
-        elif "hostname mismatch" in msg or "name mismatch" in msg:
-            return ("[bold red]TLS MITM[/bold red]", "Cert mismatch", bytes_read)
-        elif "expired" in msg:
-            return ("[bold red]TLS MITM[/bold red]", "Cert expired", bytes_read)
-        else:
-            return ("[red]SSL CERT[/red]", "Cert error", bytes_read)
-
-    if "cipher" in msg or "no shared cipher" in msg:
-        return ("[bold red]TLS MITM[/bold red]", "Cipher mismatch", bytes_read)
+        return ("[bold red]TLS MITM[/bold red]", "Подмена сертификата", bytes_read)
 
     if "version" in msg or "protocol version" in msg:
         return ("[bold red]NO TLS1.3[/bold red]", "Server has no TLS 1.3", bytes_read)
 
-    if isinstance(error, ssl.SSLZeroReturnError):
-        # Close notify в неожиданный момент — признак DPI или блокировки
-        return ("[bold red]TLS DPI[/bold red]", "Неожиданный close notify", bytes_read)
-
     if "internal error" in msg:
         return ("[red]SSL ERR[/red]", "Internal error", bytes_read)
-
-    if "handshake" in msg:
-        return ("[red]TLS ERR[/red]", "Handshake error", bytes_read)
 
     return ("[red]SSL ERR[/red]", clean_detail(str(error)[:40]), bytes_read)
 
@@ -191,13 +157,13 @@ def classify_connect_error(error: Exception, bytes_read: int, stage: str = "unkn
     # TLS ALERT внутри ConnectError (DPI)
     if "sslv3_alert" in full_text or "ssl alert" in full_text or ("alert" in full_text and "handshake" in full_text):
         if "handshake_failure" in full_text or "handshake failure" in full_text:
-            return ("[bold red]TLS DPI[/bold red]", "Handshake alert", bytes_read)
+            return ("[bold red]TLS ALERT[/bold red]", "Handshake alert", bytes_read)
         elif "unrecognized_name" in full_text:
-            return ("[bold red]TLS DPI[/bold red]", "SNI alert", bytes_read)
+            return ("[bold red]TLS ALERT[/bold red]", "SNI alert", bytes_read)
         elif "protocol_version" in full_text or "alert_protocol_version" in full_text:
-            return ("[bold red]TLS BLOCK[/bold red]", "Version alert", bytes_read)
+            return ("[bold red]TLS ALERT[/bold red]", "Version alert", bytes_read)
         else:
-            return ("[bold red]TLS DPI[/bold red]", "TLS alert", bytes_read)
+            return ("[bold red]TLS ALERT[/bold red]", "TLS alert", bytes_read)
 
     ssl_err = find_cause(error, ssl.SSLError)
     if ssl_err is not None:
@@ -208,15 +174,21 @@ def classify_connect_error(error: Exception, bytes_read: int, stage: str = "unkn
         return ("[bold red]REFUSED[/bold red]", "TCP соединение отклонено", bytes_read)
 
     if find_cause(error, ConnectionResetError) is not None or err_errno in (errno.ECONNRESET, config.WSAECONNRESET) or "connection reset" in full_text:
-        return ("[bold red]RST[/bold red]", "TCP соединение сброшено", bytes_read)
+        if stage in ("tls_handshake", "tls_connected"):
+            return ("[bold red]TLS RST[/bold red]", "Активный сброс (TCP RST)", bytes_read)
+        return ("[bold red]TCP RST[/bold red]", "TCP соединение сброшено", bytes_read)
 
     if find_cause(error, ConnectionAbortedError) is not None or err_errno in (getattr(errno, 'ECONNABORTED', 103), config.WSAECONNABORTED) or "connection aborted" in full_text:
-        return ("[bold red]ABORT[/bold red]", "TCP соединение прервано", bytes_read)
+        if stage in ("tls_handshake", "tls_connected"):
+            return ("[bold red]TLS ABORT[/bold red]", "Соединение прервано (Abort)", bytes_read)
+        return ("[bold red]TCP ABORT[/bold red]", "TCP соединение прервано", bytes_read)
 
     if find_cause(error, TimeoutError) is not None or err_errno in (errno.ETIMEDOUT, config.WSAETIMEDOUT) or "timed out" in full_text:
-        if tcp_connected:
+        if stage == "tls_handshake":
             return ("[bold red]TLS DROP[/bold red]", "TLS Handshake timeout", bytes_read)
-        return ("[red]TIMEOUT[/red]", "TCP timeout", bytes_read)
+        elif stage == "tcp_connect":
+            return ("[bold red]SYN DROP[/bold red]", "TCP SYN timeout", bytes_read)
+        return ("[red]TIMEOUT[/red]", f"Timeout ({stage})", bytes_read)
 
     if err_errno in (errno.ENETUNREACH, config.WSAENETUNREACH) or "network is unreachable" in full_text:
         return ("[red]NET UNREACH[/red]", "Нет маршрута (ICMP unreach)", bytes_read)
@@ -230,19 +202,23 @@ def classify_connect_error(error: Exception, bytes_read: int, stage: str = "unkn
     return ("[red]CONN ERR[/red]", clean_detail(str(error)[:40]), bytes_read)
 
 
-def classify_read_error(error: Exception, bytes_read: int) -> Tuple[str, str, int]:
+def classify_read_error(error: Exception, bytes_read: int, stage: str = "unknown") -> Tuple[str, str, int]:
     full_text = collect_error_text(error)
     err_errno = get_errno_from_chain(error)
 
     if find_cause(error, ConnectionResetError) is not None \
             or err_errno in (errno.ECONNRESET, config.WSAECONNRESET) \
             or "connection reset" in full_text:
-        return ("[bold red]RST[/bold red]", "TCP соединение сброшено", bytes_read)
+        if stage in ("tls_handshake", "tls_connected"):
+            return ("[bold red]TLS RST[/bold red]", "Активный сброс (TCP RST)", bytes_read)
+        return ("[bold red]TCP RST[/bold red]", "TCP соединение сброшено", bytes_read)
 
     if find_cause(error, ConnectionAbortedError) is not None \
             or err_errno in (getattr(errno, 'ECONNABORTED', 103), config.WSAECONNABORTED) \
             or "connection aborted" in full_text:
-        return ("[bold red]ABORT[/bold red]", "TCP соединение прервано", bytes_read)
+        if stage in ("tls_handshake", "tls_connected"):
+            return ("[bold red]TLS ABORT[/bold red]", "Соединение прервано (Abort)", bytes_read)
+        return ("[bold red]TCP ABORT[/bold red]", "TCP соединение прервано", bytes_read)
 
     if find_cause(error, BrokenPipeError) is not None \
             or err_errno == errno.EPIPE \
@@ -264,3 +240,23 @@ def classify_read_error(error: Exception, bytes_read: int) -> Tuple[str, str, in
         return ("[red]READ ERR[/red]", "Read error", bytes_read)
 
     return ("[red]READ ERR[/red]", f"{type(error).__name__}", bytes_read)
+
+def get_exception_chain_full(exc: Exception) -> str:
+    """Возвращает полную детализированную цепочку исключений для отладки."""
+    chain = []
+    current = exc
+    depth = 0
+    while current and depth < 10:
+        exc_name = current.__class__.__name__
+        msg = str(current).strip()
+
+        err_info = ""
+        if isinstance(current, OSError) and current.errno:
+            err_info = f" (errno={current.errno}, {errno.errorcode.get(current.errno, 'UNKNOWN')})"
+
+        chain.append(f"[{depth}] {exc_name}{err_info}: {msg}")
+
+        current = current.__cause__ or current.__context__
+        depth += 1
+
+    return " | ".join(chain)
